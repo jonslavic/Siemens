@@ -320,9 +320,18 @@ def main():
         hed_cache[siasn] = (seq, lims)
         return hed_cache[siasn]
 
-    # Resolve .dat files
+    # Resolve .dat files — bare filenames are resolved relative to data_dir
     if args.dat:
-        dat_files = args.dat
+        dat_files = []
+        for p in args.dat:
+            if os.path.exists(p):
+                dat_files.append(p)
+            else:
+                candidate = os.path.join(data_dir, os.path.basename(p))
+                if os.path.exists(candidate):
+                    dat_files.append(candidate)
+                else:
+                    print(f"WARNING: {p} not found, skipping")
     else:
         dat_files = sorted(glob.glob(os.path.join(data_dir, "Data*.dat")))
 
