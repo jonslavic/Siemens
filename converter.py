@@ -23,10 +23,8 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
 WATS_NS = "http://wats.virinco.com/schemas/WATS/Report/wsxf"
-XSI_NS  = "http://www.w3.org/2001/XMLSchema-instance"
 
-ET.register_namespace("",    WATS_NS)
-ET.register_namespace("xsi", XSI_NS)
+ET.register_namespace("", WATS_NS)
 
 # First 17 columns of every row are fixed metadata.
 METADATA_FIELDS = [
@@ -138,12 +136,26 @@ def _sub(parent, tag, **attrib):
 
 
 def build_wsxf(row, result_cols, limits, seq_name):
-    """Return an ElementTree root for one test record."""
-    root = ET.Element(f"{{{WATS_NS}}}WATS_Report")
-    root.set(f"{{{XSI_NS}}}schemaLocation", WATS_NS)
+    """Return an ElementTree root for one test record.
 
-    uut_report = _sub(root, "UUT_Report")
-
+    Correct WSXF structure (verified by reflecting Virinco.WATS.ClientAPI.dll):
+      <Reports>
+        <Report type="UUT" SN=... PN=... Rev=... Start=... Result=... MachineName=...>
+          <UUT BatchSN=... TestSocketIndex=... ExecutionTime=... UserLoginName=.../>
+          <Process Code=... Name=.../>
+          <Step Name=... StepType="SequenceCall" Status=... total_time=...>
+            <SequenceCall Name=... Filename=.../>
+            <Step Name=... StepType="ET_NLT" Status=...>
+              <NumericLimit Name=... NumericValue=... Units=... CompOperator=...
+                            LowLimit=... HighLimit=... Status=.../>
+            </Step>
+            <Step Name=... StepType="ET_SVT" Status="Passed">
+              <StringValue Name=... StringValue=... Status="Passed"/>
+            </Step>
+          </Step>
+        </Report>
+      </Reports>
+    """
     label   = row.get("LABEL", "Passed")
     overall = "Passed" if label == "Passed" else "Failed"
     siasn   = row.get("SIASN", "")
@@ -158,30 +170,42 @@ def build_wsxf(row, result_cols, limits, seq_name):
     if duration == "*":
         duration = "0"
 
-    _sub(uut_report, "UUT",
-         partNumber       = pn,
-         partRevision     = rev,
-         serialNumber     = row.get("SER_NO", ""),
-         testSocketIndex  = wtnr,
-         batchSerialNumber= row.get("ASN", ""),
-         testStatus       = overall,
-         startDateTime    = parse_datetime(
-                                row.get("DATE", "01/01/2000"),
-                                row.get("TIME", "12:00:00")),
-         executionTime    = duration,
-         operatorName     = row.get("FTID", ""),
-         stationName      = row.get("FTID", ""),
-         location         = "Production",
-         purpose          = "Production Test",
-         processCode      = "9997",
-         processName      = "Functional Test",
+    root   = ET.Element(f"{{{WATS_NS}}}Reports")
+    report = _sub(root, "Report",
+                  type       = "UUT",
+                  SN         = row.get("SER_NO", ""),
+                  PN         = pn,
+                  Rev        = rev,
+                  Start      = parse_datetime(
+                                   row.get("DATE", "01/01/2000"),
+                                   row.get("TIME", "12:00:00")),
+                  Result     = overall,
+                  MachineName= row.get("FTID", ""),
+                  Location   = "Production",
+                  Purpose    = "Production Test",
     )
 
-    seq_call = _sub(uut_report, "SequenceCall",
-                    name          = seq_name,
-                    sequenceFile  = f"{seq_name}.seq",
-                    testStatus    = overall,
-                    executionTime = duration,
+    _sub(report, "UUT",
+         BatchSN         = row.get("ASN", ""),
+         TestSocketIndex = wtnr,
+         ExecutionTime   = duration,
+         UserLoginName   = row.get("FTID", ""),
+    )
+
+    _sub(report, "Process",
+         Code = "9997",
+         Name = "Functional Test",
+    )
+
+    seq_step = _sub(report, "Step",
+                    Name       = seq_name,
+                    StepType   = "SequenceCall",
+                    Status     = overall,
+                    total_time = duration,
+    )
+    _sub(seq_step, "SequenceCall",
+         Name     = seq_name,
+         Filename = f"{seq_name}.seq",
     )
 
     for col in result_cols:
@@ -189,7 +213,6 @@ def build_wsxf(row, result_cols, limits, seq_name):
         if value == "*":
             continue
 
-        # Determine step type by trying to parse value as float
         try:
             float(value)
             is_numeric = True
@@ -200,31 +223,35 @@ def build_wsxf(row, result_cols, limits, seq_name):
             lim      = limits.get(col["name"].upper())
             s_status = numeric_status(value, lim)
 
-            attr = {
-                "name":          col["name"],
-                "stepType":      "ET_NLT",
-                "testStatus":    s_status,
-                "executionTime": "0",
-                "units":         col["unit"],
-                "value":         value,
+            step = _sub(seq_step, "Step",
+                        Name     = col["name"],
+                        StepType = "ET_NLT",
+                        Status   = s_status,
+            )
+            nl_attr = {
+                "Name":         col["name"],
+                "NumericValue": value,
+                "Units":        col["unit"],
+                "Status":       s_status,
             }
             if lim:
                 low, high = lim.get("low"), lim.get("high")
-                if low  is not None: attr["lowLimit"]  = str(low)
-                if high is not None: attr["highLimit"] = str(high)
-                if   low is not None and high is not None: attr["compOperator"] = "GELE"
-                elif low is not None:                      attr["compOperator"] = "GE"
-                elif high is not None:                     attr["compOperator"] = "LE"
-
-            _sub(seq_call, "NumericLimitStep", **attr)
+                if low  is not None: nl_attr["LowLimit"]     = str(low)
+                if high is not None: nl_attr["HighLimit"]    = str(high)
+                if   low is not None and high is not None: nl_attr["CompOperator"] = "GELE"
+                elif low is not None:                      nl_attr["CompOperator"] = "GE"
+                elif high is not None:                     nl_attr["CompOperator"] = "LE"
+            _sub(step, "NumericLimit", **nl_attr)
         else:
-            # Boolean or string value (e.g. "TRUE", "FALSE", switch states)
-            _sub(seq_call, "StringValueStep",
-                 name          = col["name"],
-                 stepType      = "ET_SVT",
-                 testStatus    = "Passed",
-                 executionTime = "0",
-                 value         = value,
+            step = _sub(seq_step, "Step",
+                        Name     = col["name"],
+                        StepType = "ET_SVT",
+                        Status   = "Passed",
+            )
+            _sub(step, "StringValue",
+                 Name        = col["name"],
+                 StringValue = value,
+                 Status      = "Passed",
             )
 
     return root
