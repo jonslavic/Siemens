@@ -173,7 +173,7 @@ def build_wsxf(row, result_cols, limits, seq_name):
          stationName      = row.get("FTID", ""),
          location         = "Production",
          purpose          = "Production Test",
-         processCode      = "10",
+         processCode      = "9997",
          processName      = "Functional Test",
     )
 
