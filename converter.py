@@ -332,15 +332,18 @@ def main():
             xml_root = build_wsxf(row, result_cols, limits, seq_name)
             xml_bytes = pretty_bytes(xml_root)
 
-            date_part = row.get("DATE",  "01012000").replace("/", "")
-            time_part = (row.get("TIME", "000000")
-                         .replace(":", "").replace("_AM", "").replace("_PM", "")
-                         .replace("_", ""))
+            date_part = safe_name(row.get("DATE", "01/01/2000").replace("/", ""))
+            time_part = safe_name(
+                row.get("TIME", "000000")
+                .replace(":", "").replace("_AM", "").replace("_PM", "")
+                .replace("_", "")
+            )
+            counter   = safe_name(row.get("COUNTER", "1"))
             out_name = (
                 f"{safe_name(siasn)}"
                 f"_{safe_name(row.get('SER_NO', 'UNK'))}"
                 f"_{date_part}_{time_part}"
-                f"_C{row.get('COUNTER', '1')}.xml"
+                f"_C{counter}.xml"
             )
             with open(os.path.join(out_dir, out_name), "wb") as fh_out:
                 fh_out.write(xml_bytes)
